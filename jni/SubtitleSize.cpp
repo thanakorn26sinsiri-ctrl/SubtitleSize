@@ -4,6 +4,7 @@
 #include <mod/amlmod.h>
 #include <dlfcn.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -11,7 +12,7 @@
 #include <string.h>
 #include <math.h>
 
-MYMOD(net.user.subtitlesize, SubtitleSize, 2.0, user)
+MYMOD(net.user.subtitlesize, SubtitleSize, 2.1, user)
 
 enum { CAT_NONE = 0, CAT_SUB, CAT_MENU, CAT_HUD };
 
@@ -21,8 +22,33 @@ static float g_subOffsetY = 0.0f;
 static float g_menuScale = 1.0f;
 static float g_hudScale = 1.0f;
 
-static char g_soDir[512] = "";     // folder of this .so (.../mods)
-static char g_parentDir[512] = ""; // parent of mods folder
+static char g_soDir[512] = "";     // folder of this .so (.../files)
+static char g_parentDir[512] = ""; // parent of that folder
+
+// folders where the log is written (first one that works wins; all are tried)
+static const char* const kLogDirs[] = {
+    "/storage/emulated/0/Android_unprotected/data/com.rockstargames.gtasa/files",
+    "/storage/emulated/0/Android/data/com.rockstargames.gtasa/files",
+    "/storage/emulated/0/Android/data/com.rockstargames.gtasa",
+};
+
+// ---------------------------------------------------------------- helpers
+// mkdir -p
+static void MkdirP(const char* path)
+{
+    char tmp[640];
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    for (char* p = tmp + 1; *p; ++p)
+    {
+        if (*p == '/')
+        {
+            *p = 0;
+            mkdir(tmp, 0777);
+            *p = '/';
+        }
+    }
+    mkdir(tmp, 0777);
+}
 
 static void Log(const char* fmt, ...)
 {
@@ -31,11 +57,13 @@ static void Log(const char* fmt, ...)
     va_start(ap, fmt);
     vsnprintf(msg, sizeof(msg), fmt, ap);
     va_end(ap);
-    const char* dirs[3] = {
-        g_soDir,
-        "/storage/emulated/0/Android/data/com.rockstargames.gtasa",
-        "/storage/emulated/0/Android/data/com.rockstargames.gtasa/files" };
-    for (int i = 0; i < 3; i++)
+
+    const char* dirs[1 + sizeof(kLogDirs) / sizeof(kLogDirs[0])];
+    int nd = 0;
+    dirs[nd++] = g_soDir;
+    for (size_t i = 0; i < sizeof(kLogDirs) / sizeof(kLogDirs[0]); i++) dirs[nd++] = kLogDirs[i];
+
+    for (int i = 0; i < nd; i++)
     {
         if (!dirs[i][0]) continue;
         char p[640];
@@ -90,6 +118,12 @@ static bool ReadIni(const char* path)
 
 static bool WriteDefaultIni(const char* path)
 {
+    // fopen() does not create folders -> create ".../configs" first
+    char dir[640];
+    snprintf(dir, sizeof(dir), "%s", path);
+    char* slash = strrchr(dir, '/');
+    if (slash) { *slash = 0; MkdirP(dir); }
+
     FILE* f = fopen(path, "w");
     if (!f) return false;
     fprintf(f,
@@ -114,11 +148,12 @@ extern "C" void OnModLoad();
 
 static void LoadConfig()
 {
-    char cand[3][640];
+    char cand[5][640];
     int n = 0;
+    snprintf(cand[n++], sizeof(cand[0]), "/storage/emulated/0/Android_unprotected/data/com.rockstargames.gtasa/files/configs/SubtitleSize.ini");
     if (g_parentDir[0]) snprintf(cand[n++], sizeof(cand[0]), "%s/configs/SubtitleSize.ini", g_parentDir);
-    snprintf(cand[n++], sizeof(cand[0]), "/storage/emulated/0/Android/data/com.rockstargames.gtasa/configs/SubtitleSize.ini");
     snprintf(cand[n++], sizeof(cand[0]), "/storage/emulated/0/Android/data/com.rockstargames.gtasa/files/configs/SubtitleSize.ini");
+    snprintf(cand[n++], sizeof(cand[0]), "/storage/emulated/0/Android/data/com.rockstargames.gtasa/configs/SubtitleSize.ini");
 
     for (int i = 0; i < n; i++)
         if (ReadIni(cand[i])) { Log("read ini: %s", cand[i]); return; }
@@ -208,7 +243,7 @@ extern "C" void OnModLoad()
     } else {
         g_soDir[0] = 0;
     }
-    Log("OnModLoad v2.0 so=%s", fname);
+    Log("OnModLoad v2.1 so=%s", fname);
 
     g_base = aml->GetLib("libGTASA.so");
     Log("libGTASA base=%p", (void*)g_base);

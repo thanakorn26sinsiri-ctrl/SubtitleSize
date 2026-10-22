@@ -6,6 +6,8 @@
 #include <sys/mman.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
+#include <errno.h>
 #include <string.h>
 #include <math.h>
 
@@ -18,6 +20,30 @@ static float g_subScale = 1.3f;
 static float g_subOffsetY = 0.0f;
 static float g_menuScale = 1.0f;
 static float g_hudScale = 1.0f;
+
+static char g_soDir[512] = "";     // folder of this .so (.../mods)
+static char g_parentDir[512] = ""; // parent of mods folder
+
+static void Log(const char* fmt, ...)
+{
+    char msg[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+    const char* dirs[3] = {
+        g_soDir,
+        "/storage/emulated/0/Android/data/com.rockstargames.gtasa",
+        "/storage/emulated/0/Android/data/com.rockstargames.gtasa/files" };
+    for (int i = 0; i < 3; i++)
+    {
+        if (!dirs[i][0]) continue;
+        char p[640];
+        snprintf(p, sizeof(p), "%s/SubtitleSize.log", dirs[i]);
+        FILE* f = fopen(p, "a");
+        if (f) { fprintf(f, "%s\n", msg); fclose(f); }
+    }
+}
 
 static void (*SetScale_orig)(float) = nullptr;
 static void (*PrintString_orig)(float, float, unsigned short*) = nullptr;
@@ -62,10 +88,10 @@ static bool ReadIni(const char* path)
     return true;
 }
 
-static void WriteDefaultIni(const char* path)
+static bool WriteDefaultIni(const char* path)
 {
     FILE* f = fopen(path, "w");
-    if (!f) return;
+    if (!f) return false;
     fprintf(f,
         "[Subtitles]\n"
         "; font size multiplier (1.0 = original game size)\n"
@@ -81,29 +107,27 @@ static void WriteDefaultIni(const char* path)
         "; font size multiplier for on-screen HUD text (area name, mission text, widgets)\n"
         "Scale = 1.0\n");
     fclose(f);
+    return true;
 }
 
 extern "C" void OnModLoad();
 
 static void LoadConfig()
 {
-    char path[600] = "";
-    Dl_info di;
-    if (dladdr((void*)&OnModLoad, &di) && di.dli_fname)
-    {
-        char tmp[512];
-        snprintf(tmp, sizeof(tmp), "%s", di.dli_fname);
-        char* s1 = strrchr(tmp, '/');          // .../mods/libX.so
-        if (s1) {
-            *s1 = 0;
-            char* s2 = strrchr(tmp, '/');      // .../mods
-            if (s2) { *s2 = 0; snprintf(path, sizeof(path), "%s/configs/SubtitleSize.ini", tmp); }
-        }
-    }
-    if (!path[0])
-        snprintf(path, sizeof(path), "/storage/emulated/0/Android/data/com.rockstargames.gtasa/configs/SubtitleSize.ini");
+    char cand[3][640];
+    int n = 0;
+    if (g_parentDir[0]) snprintf(cand[n++], sizeof(cand[0]), "%s/configs/SubtitleSize.ini", g_parentDir);
+    snprintf(cand[n++], sizeof(cand[0]), "/storage/emulated/0/Android/data/com.rockstargames.gtasa/configs/SubtitleSize.ini");
+    snprintf(cand[n++], sizeof(cand[0]), "/storage/emulated/0/Android/data/com.rockstargames.gtasa/files/configs/SubtitleSize.ini");
 
-    if (!ReadIni(path)) WriteDefaultIni(path);
+    for (int i = 0; i < n; i++)
+        if (ReadIni(cand[i])) { Log("read ini: %s", cand[i]); return; }
+
+    for (int i = 0; i < n; i++)
+    {
+        if (WriteDefaultIni(cand[i])) { Log("created ini: %s", cand[i]); return; }
+        Log("cannot write %s (errno %d)", cand[i], errno);
+    }
 }
 
 // ---------------------------------------------------------------- caller classification
@@ -171,16 +195,37 @@ static void HookGot(uintptr_t slot, void* hook, void** orig)
 
 extern "C" void OnModLoad()
 {
+    Dl_info di;
+    const char* fname = "";
+    if (dladdr((void*)&OnModLoad, &di) && di.dli_fname) fname = di.dli_fname;
+    snprintf(g_soDir, sizeof(g_soDir), "%s", fname);
+    char* s1 = strrchr(g_soDir, '/');
+    if (s1) {
+        *s1 = 0;
+        snprintf(g_parentDir, sizeof(g_parentDir), "%s", g_soDir);
+        char* s2 = strrchr(g_parentDir, '/');
+        if (s2) *s2 = 0; else g_parentDir[0] = 0;
+    } else {
+        g_soDir[0] = 0;
+    }
+    Log("OnModLoad v2.0 so=%s", fname);
+
     g_base = aml->GetLib("libGTASA.so");
+    Log("libGTASA base=%p", (void*)g_base);
     if (!g_base) return;
+
+    LoadConfig();
 
     // version check: subtitle scale table of libGTASA.so 2.00 (0.85f, 1.02f)
     float a = *(float*)(g_base + 0x439230);
     float b = *(float*)(g_base + 0x439234);
-    if (fabsf(a - 0.85f) > 0.001f || fabsf(b - 1.02f) > 0.001f) return;
-
-    LoadConfig();
+    if (fabsf(a - 0.85f) > 0.001f || fabsf(b - 1.02f) > 0.001f)
+    {
+        Log("version check failed: %f %f (hooks not installed)", a, b);
+        return;
+    }
 
     HookGot(g_base + 0x670954, (void*)&SetScale_hook, (void**)&SetScale_orig);     // CFont::SetScale
     HookGot(g_base + 0x6737C4, (void*)&PrintString_hook, (void**)&PrintString_orig); // CFont::PrintString
+    Log("hooks installed; sub=%.2f offY=%.2f menu=%.2f hud=%.2f", g_subScale, g_subOffsetY, g_menuScale, g_hudScale);
 }

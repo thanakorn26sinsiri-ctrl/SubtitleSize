@@ -148,12 +148,11 @@ extern "C" void OnModLoad();
 
 static void LoadConfig()
 {
-    char cand[5][640];
+    char cand[4][640];
     int n = 0;
-    snprintf(cand[n++], sizeof(cand[0]), "/storage/emulated/0/Android_unprotected/data/com.rockstargames.gtasa/files/configs/SubtitleSize.ini");
-    if (g_parentDir[0]) snprintf(cand[n++], sizeof(cand[0]), "%s/configs/SubtitleSize.ini", g_parentDir);
-    snprintf(cand[n++], sizeof(cand[0]), "/storage/emulated/0/Android/data/com.rockstargames.gtasa/files/configs/SubtitleSize.ini");
+    snprintf(cand[n++], sizeof(cand[0]), "/storage/emulated/0/Android_unprotected/data/com.rockstargames.gtasa/configs/SubtitleSize.ini");
     snprintf(cand[n++], sizeof(cand[0]), "/storage/emulated/0/Android/data/com.rockstargames.gtasa/configs/SubtitleSize.ini");
+    if (g_parentDir[0]) snprintf(cand[n++], sizeof(cand[0]), "%s/configs/SubtitleSize.ini", g_parentDir);
 
     for (int i = 0; i < n; i++)
         if (ReadIni(cand[i])) { Log("read ini: %s", cand[i]); return; }
